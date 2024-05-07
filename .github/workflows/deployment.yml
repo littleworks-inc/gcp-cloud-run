@@ -1,0 +1,107 @@
+name: Build app and create a release in Cloud Deploy
+
+on:
+  # push:
+  #   branches:
+  #     - $default_branch
+# on:
+  workflow_call:
+    inputs:
+      environment:
+        type: string
+        required: true
+        description: Name of the target environment. 
+      ref:  
+        type: string
+        required: true
+        description: The tag or SHA to checkout. 
+      PROJECT_ID:
+        type: string
+        required: true  
+        description: project id
+      GAR_LOCATION:
+        type: string
+        required: true 
+      REGION:
+        type: string
+        required: true 
+      APP:
+        type: string
+        required: true
+    secrets:
+      workload_identity_provider:
+        description: 'gcp workload_identity_provider'
+        required: true
+      service_account:
+        description: 'gcp service_account'
+        required: true
+
+jobs:
+  deploy:
+    # Add 'id-token' with the intended permissions for workload identity federation
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
+    runs-on: ubuntu-latest
+    env:
+      PROJECT_ID: ${{ inputs.PROJECT_ID }} # TODO: update Google Cloud project id
+      GAR_LOCATION: ${{ inputs.GAR_LOCATION }} # TODO: update Artifact Registry location
+      REGION: ${{ inputs.REGION }} # TODO: update Cloud Run service region
+      APP: ${{ inputs.APP }}
+      workload_identity_provider: ${{ secrets.workload_identity_provider }}
+      service_account: ${{ secrets.service_account }}
+    steps:
+      - name: 'Checkout'
+        uses: 'actions/checkout@v3'
+
+      - id: 'auth'
+        name: 'Authenticate to Google Cloud'
+        uses: 'google-github-actions/auth@v2'
+        with:
+          create_credentials_file: 'true'
+          token_format: 'access_token'
+          workload_identity_provider: '${{ env.workload_identity_provider }}'
+          service_account: '${{ env.service_account }}'
+
+      - name: 'Set up Cloud SDK'
+        uses: 'google-github-actions/setup-gcloud@v2'
+
+      - name: 'Docker auth'
+        run: |-
+          gcloud auth configure-docker ${{ env.GAR_LOCATION }}-docker.pkg.dev
+
+      - name: 'Build and push container'
+        run: |-
+          docker build -t "${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.APP }}/${{ env.APP }}:${{ inputs.ref }}" ./app
+          docker push "${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.APP }}/${{ env.APP }}:${{ inputs.ref }}"
+
+      - name: 'Render templatised config manifests'
+        run: |-
+          export PROJECT_ID="${{ env.PROJECT_ID }}"
+          export REGION="${{ env.REGION }}"
+          for template in $(ls config/*.template.yaml); do envsubst < ${template} > ${template%%.*}.yaml ; done
+
+      - name: 'Create Cloud Deploy delivery pipeline'
+        run: |-
+          gcloud deploy apply --file config/clouddeploy.yaml --region ${{ env.GAR_LOCATION }}
+
+      - name: 'Create release name'
+        run: |-
+          echo "RELEASE_NAME=${{ env.APP }}-${GITHUB_SHA::7}-${GITHUB_RUN_NUMBER}" >> ${GITHUB_ENV}
+
+      - name: 'Create Cloud Deploy release'
+        id: 'release'
+        uses: 'google-github-actions/create-cloud-deploy-release@v1'
+        with:
+          delivery_pipeline: '${{ env.APP }}'
+          name: '${{ env.RELEASE_NAME }}'
+          region: '${{ env.REGION }}'
+          description: '${{ env.GITHUB_COMMIT_MSG }}'
+          skaffold_file: 'config/skaffold.yaml'
+          images: 'app=${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.APP }}/${{ env.APP }}:${{ inputs.ref }}'
+
+      - name: 'Report Cloud Deploy release'
+        run: |-
+          echo "Created release ${{ steps.release.outputs.name }} "
+          echo "Release link ${{ steps.release.outputs.link }} "
