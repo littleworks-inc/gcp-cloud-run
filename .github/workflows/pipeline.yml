@@ -1,0 +1,40 @@
+on:
+  push:
+    branches: [develop, stage, main]
+
+jobs: 
+  dev:
+    name: deploy cloudrun to dev environment
+    # if: ${{ github.ref == 'refs/heads/develop' || github.base_ref == 'develop' }}
+    if: ${{ github.ref == 'refs/heads/main' || github.base_ref == 'main' }}
+    uses: ./.github/workflows/_deployment.yaml
+    permissions: 
+      id-token: write
+      contents: read
+    with: 
+      environment: dev
+      PROJECT_ID: nomadic-rush-408023
+      GAR_LOCATION: northamerica-northeast2
+      REGION: northamerica-northeast2
+      ref: ${{ github.sha }}
+    secrets: inherit
+  # stage:
+  #   if: ${{ github.ref == 'refs/heads/stage' || github.base_ref == 'stage' }}
+  #   uses: ./.github/workflows/_deployment.yaml
+  #   permissions: 
+  #     id-token: write
+  #     contents: read
+  #   with: 
+  #     environment: stage
+  #     ref: ${{ github.sha }}
+  #   secrets: inherit
+  # prod: 
+  #   if: ${{ github.ref == 'refs/heads/main' || github.base_ref == 'main' }}
+  #   uses: ./.github/workflows/_deployment.yaml
+  #   permissions: 
+  #     id-token: write
+  #     contents: read
+  #   with:
+  #     environment: prod
+  #     ref: ${{ github.sha }}
+  #   secrets: inherit
